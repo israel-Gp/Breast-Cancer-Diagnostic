@@ -1,0 +1,744 @@
+---
+title: "Breast Cancer Biopsy Neural Network Diagnosis"
+author: "Israel Girón-Palacios"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+header-includes: \usepackage{booktabs}
+abstract: This paper covers the process by which a Neural Network is trained for the
+  purpose of predicting Breast Cancer utilizing the analysis of a Fine Needle Aspiration
+  biopsy
+---
+
+```{r setup, message=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
+
+# Libraries --------------------------------------------------------------
+
+## Required Libraries ------------------------------------------------------
+
+packages.to.install <- c(
+  # General Purpose
+  
+  'tidyverse',
+  # Tidyverse
+  'janitor',
+  # Data Cleaning
+  'caret',
+  # for machine learning
+  'furrr',
+  # Parallel mapping
+  'broom',
+  # For tidying base and tidyverse operations
+  'lubridate',
+  # For date-time variable manipulation
+  'ggcorrplot',
+  # For ggplot2 correlation plots
+  'ggrepel',
+  # GGplot2 repel texts
+  'doParallel',
+  # Parrallel Processing with CARET
+  'report',
+  # Streamlined reports
+  'broom',
+  
+  # GGplot addons
+  'ggridges',
+  'ggh4x',
+  'patchwork',
+  'scales',
+  
+  # Nerural Plots
+  'NeuralNetTools',
+  
+  # Feature Selection
+  
+  'Boruta',
+  # Variable Importance wrappe
+  'xgboost',
+  # Boruta xgboost parsing in Boruta
+  'varrank',
+  #Variable rank based on mutual information
+  'infotheo', # Entropy & Mutual Information
+  
+   # R Markdown
+  'knitr', # Rmarkdown aid
+  'booktabs', #Rmarkdown aid
+  'tinytex', # Latex aid
+  'MikTeX', # Latex aid
+  'kableExtra',# Rmarkdown tables
+  'devtools' # For pathced libraries
+  
+)
+
+## Download Missing Libraries ----------------------------------------------
+
+# Parse missing packages
+missing.packages <-
+  packages.to.install[!(packages.to.install %in% installed.packages()[, "Package"])]
+
+if (length(missing.packages))
+  install.packages(missing.packages, dependencies = TRUE, repos = 'http://cran.us.r-project.org')
+
+# Install tinytex
+tinytex::install_tinytex(force = TRUE) 
+
+# Load Base Libraries -----------------------------------------------------
+
+library(janitor)
+library(broom)
+library(caret)
+library(furrr)
+library(lubridate)
+library(ggcorrplot)
+library(doParallel)
+library(scales)
+library(ggridges)
+library(patchwork)
+library(ggh4x)
+library(Boruta)
+library(varrank)
+library(infotheo)
+library(report)
+library(broom)
+library(kableExtra)
+library(tidyverse)
+```
+
+# *Introduction*
+
+*Breast cancer is a type of cancer that forms in the cells of the breast*[^1]. It is one of the most common forms of cancer, second only to skin cancer, accounting for approximately 30% of new cancers in female patients each year[^2]. The American Cancer Society's diagnosis estimates for breast cancer for 2023 is around 297,790 cases. They also estimate approximately 43,700 deaths during the same year. Considering these statistics adequate diagnosis from mildly invasive procedures such as Fine Needle Aspiration Biopsy are major consideration.
+
+[^1]: [*https://www.mayoclinic.org/diseases-conditions/breast-cancer/symptoms-causes/syc-20352470?utm_source=Google&utm_medium=abstract&utm_content=Breast-cancer&utm_campaign=Knowledge-panel*](https://www.mayoclinic.org/diseases-conditions/breast-cancer/symptoms-causes/syc-20352470?utm_source=Google&utm_medium=abstract&utm_content=Breast-cancer&utm_campaign=Knowledge-panel){.uri}
+
+[^2]: <https://www.cancer.org/cancer/types/breast-cancer/about/how-common-is-breast-cancer.html#>[:\~:text=It%20is%20about%2030%25%20(or,(DCIS)%20will%20be%20diagnosed.](<https://www.cancer.org/cancer/types/breast-cancer/about/how-common-is-breast-cancer.html#>:\~:text=It%20is%20about%2030%25%20(or,(DCIS)%20will%20be%20diagnosed.)
+
+# *Data & Methodology*
+
+*The models trained and chosen in this paper utilize the "Breast Cancer Wisconsin (Diagnostic)"*[^3] dataset provided by UC Irvine Machine Learning Repository.
+
+[^3]: [*https://archive.ics.uci.edu/dataset/17/breast+cancer+wisconsin+diagnostic*](https://archive.ics.uci.edu/dataset/17/breast+cancer+wisconsin+diagnostic){.uri}
+
+*This data was created in November 1995 by:*
+
+-   *Dr. William H. Wolberg, General Surgery Dept., University of Wisconsin*
+
+-   *Olvi L. Mangasarian, Computer Sciences Dept., University of Wisconsin*
+
+-   *W. Nick Street, Computer Sciences Dept., University of Wisconsin*
+
+*The Data was donated by Nick Street.*
+
+## *Features*
+
+*The data is composed of 32 variables, two of which are the diagnosis, the response variable, and an ID number.*
+
+*Predictors are test results one of the following in 3 iterations:*
+
+a)  *radius (mean of distances from center to points on the perimeter)*
+b)  *texture (standard deviation of gray-scale values)*
+c)  *perimeter*
+d)  *area*
+e)  *smoothness (local variation in radius lengths)*
+f)  *compactness (perimeter\^2 / area - 1.0)*
+g)  *concavity (severity of concave portions of the contour)*
+h)  *concave points (number of concave portions of the contour)*
+i)  *symmetry*
+j)  *fractal dimension ("coastline approximation" - 1)*
+
+*The iterations are in order of appearance, the mean, the standard error(SE) and the mean of the 3 largest values for the specific test. The use of these statistics for biopsy diagnosis is beyond the scope of this paper, as such all features other that ID will be considered for modeling.*
+
+*The models chosen for training are a Neural Network and Linear eXtreme Gradient Boosting.*
+
+```{r Download Data, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+
+# Source Data -------------------------------------------------------------
+
+# Creators
+# William Wolberg
+#
+# Olvi Mangasarian
+#
+# Nick Street
+#
+# W. Street
+
+# Data is the results of a breast mass biopsy
+# Data has 2 bare variables and 10 repeated variables
+
+# Download Data -----------------------------------------------------------
+
+data_url <-
+  'https://archive.ics.uci.edu/static/public/17/breast+cancer+wisconsin+diagnostic.zip'
+
+download <- 'breast+cancer+wisconsin+diagnostic.zip'
+if (!file.exists(download))
+  download.file(data_url,
+                download)
+
+wdbc_data <- 'wdbc.data'
+if (!file.exists(wdbc_data))
+  unzip(download, wdbc_data)
+
+wdbc_names <- 'wdbc.names'
+if (!file.exists(wdbc_names))
+  unzip(download, wdbc_names)
+
+# Read Data ---------------------------------------------------------------
+
+wdbc_raw <- read_csv(wdbc_data, col_names = FALSE)
+
+wdbc_names_raw <- read_csv(wdbc_names, col_names = FALSE) %>%
+  setNames(c('names')) %>%
+  pull(names)
+
+#wdbc_names_raw
+# Variable names start with [alnum]{1}\\)
+# some variables will need to repeate
+# This matched the source documentations
+
+# Extract Names -----------------------------------------------------------
+
+base_names <- wdbc_names_raw %>%
+  str_subset('(?i)^[:alnum:]{1}\\)') %>%
+  str_subset('\\:', negate = TRUE) %>%
+  str_remove_all('^(?i)^[:alnum:]{1}\\)') %>%
+  str_remove_all('\\(.*\\)') %>%
+  str_squish()
+
+core_names <- base_names[1:2]
+repeat_names <- base_names[-(1:2)]
+
+repeat_names_n <- (ncol(wdbc_raw) - 2) / 10
+
+repeat_names <- rep(repeat_names, repeat_names_n)
+
+# Clean Data --------------------------------------------------------------
+
+wdbc <- wdbc_raw %>%
+  # Set names
+  setNames(c(core_names, repeat_names)) %>%
+  # Clean Names
+  clean_names() %>%
+  # Set Classes
+  mutate(
+    id_number = as_factor(id_number),
+    diagnosis = case_when(diagnosis == 'B' ~ 'Benign',
+                          TRUE ~ 'Malignant') %>%
+      as_factor()
+  ) %>%
+  # Relocate response to left side
+  relocate(diagnosis)
+```
+
+# *Data Preparation*
+
+*The model will be chosen by gauging the sensitivity of the predictions on a test set and the model sensitivity will be calculated on the performance on a holdout set. For this purposes the data will be partitioned as 64/26/10.*
+
+```{r Data Partition, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+
+## Holdout Set ------------------------------------------------------------
+
+set.seed(2140, sample.kind = 'Rounding')
+holdout_index <-
+  createDataPartition(wdbc$diagnosis,
+                      times = 1,
+                      p = 0.1,
+                      list = FALSE) %>%
+  as.vector()
+
+holdout_set <- slice(wdbc, holdout_index)
+remaining_set <- slice(wdbc, -holdout_index)
+
+## Train & Test Set -------------------------------------------------------
+
+set.seed(2145, sample.kind = 'Rounding')
+train_index <-
+  createDataPartition(
+    remaining_set$diagnosis,
+    times = 1,
+    p = 0.8,
+    list = FALSE
+  ) %>%
+  as.vector()
+
+train_set <- slice(remaining_set, train_index)
+test_set <- slice(remaining_set, -train_index)
+```
+
+# *Data Exploration*
+
+## *Response Variable Distribution*
+
+*The spread of values for either Benign or Malignant diagnosis is somewhat unbalanced but considering that it is not an extreme difference the data will not undergo balancing.*
+
+```{r Response Explore, message=FALSE, warning=FALSE, cache=TRUE, echo=FALSE, fig.asp=0.8, fig.width=10, fig.align = 'center'}
+
+## Response Distribution --------------------------------------------------
+
+theme_set(theme_bw())
+
+response_prop <- train_set %>%
+  count(diagnosis, sort = TRUE) %>%
+  mutate(proportion = n / sum(n))
+
+# Over half of the results of FNA analysis breast mass result in a benign diagnosis
+
+train_set %>%
+  count(diagnosis, sort = TRUE) %>%
+  mutate(prop = n / sum(n),
+         diagnosis = fct_reorder(diagnosis, prop, .desc = TRUE)) %>%
+  ggplot(aes(diagnosis, prop, fill = diagnosis, label = label_percent()(prop))) +
+  geom_col(show.legend = FALSE) +
+  geom_text(position = position_stack(vjust = 0.5)) +
+  xlab('Diagnosis') +
+  ylab('Proportion') +
+  ggtitle('Breast Mass Biopsy Diagnosis')
+
+summary_table <- kbl(response_prop, col.names = c('Diagnosis','N','Proportion'), booktabs = TRUE, format.args = list(big.mark = ",")) %>% 
+  kable_styling(position = 'center', full_width = FALSE, latex_options = c('hold_position','striped'), htmltable_class = 'lightable-classic-2')
+
+summary_table
+```
+
+## *Predictor Variable Distributions*
+
+*All of the predictors are numeric therefore the distribution of values in relation to the diagnosis will be explored.*
+
+```{r Predictor Explore,message=FALSE, warning=FALSE, cache=TRUE, echo=FALSE, fig.height=20, fig.width=10, fig.align = 'center'}
+
+theme_set(theme_bw())
+
+train_set_tidy <- train_set %>%
+  pivot_longer(
+    cols = where(is.numeric),
+    names_to = 'numeric_predictor',
+    names_transform = list(numeric_predictor = as.factor)
+  ) %>%
+  mutate(
+    predictor_group = str_remove(numeric_predictor, '_[:digit:]+$') %>%
+      str_squish() %>%
+      as.factor(),
+    group_n = str_extract(numeric_predictor, '[:digit:]+$') %>%
+      replace_na('1') %>%
+      as_factor()
+  )
+
+numeric_predictor_means <- train_set_tidy %>%
+  group_by(numeric_predictor) %>%
+  summarise(mean = mean(value, na.rm = TRUE))
+
+numeric_predictor_diagnosis_means <- train_set_tidy %>%
+  group_by(numeric_predictor, diagnosis) %>%
+  summarise(mean = mean(value, na.rm = TRUE)) %>%
+  ungroup()
+
+train_set_tidy %>%
+  ggplot() +
+  geom_density(
+    show.legend = FALSE,
+    alpha = 0.25,
+    color = '#000000',
+    linewidth = 2,
+    aes(value, after_stat(ndensity))
+  ) +
+  geom_density(show.legend = FALSE,
+               alpha = 0.25,
+               aes(value, after_stat(ndensity), fill = diagnosis)) +
+  geom_histogram(
+    color = '#000000',
+    alpha = 0.25,
+    aes(value, after_stat(ndensity), fill = diagnosis)
+  ) +
+  geom_vline(
+    data = numeric_predictor_means,
+    aes(xintercept = mean),
+    linetype = 'dashed',
+    linewidth = 1.5
+  ) +
+  geom_vline(
+    data = numeric_predictor_diagnosis_means,
+    aes(xintercept = mean, color = diagnosis),
+    linetype = 'dashed',
+    linewidth = 1.5
+  ) +
+  facet_wrap2( ~ numeric_predictor,
+               scales = 'free',
+               axes = 'all',
+               ncol = 3) +
+  scale_y_continuous('Density', labels = comma) +
+  scale_x_continuous('Value', labels = comma) +
+  guides(fill = guide_legend('Diagnosis'), color = guide_legend('Diagnosis Mean')) +
+  ggtitle('Numeric Predictor Distirbution grouped by Biopsy Diagnosis')
+```
+
+*There are clear differences in diagnosis being tied to the mean value of a number of predictors. Most notably Area3, which would be the mean of the 3 largest values of area. Analyzing the features further it can be observed that there may be some correlations present between the predictors.*
+
+# *Feature Selection*
+
+## *Correlation*
+
+*There are a a large amount of correlated predictors, unsurprisingly features such as area and perimeter have a relationship. However, despite the amount of highly correlated values most do not meet the typical cutoff of 0.9.*
+
+```{r Correlations, message=FALSE, warning=FALSE, cache=TRUE, echo=FALSE, fig.asp=0.8, fig.width=10, fig.align = 'center'}
+
+## Correlation ------------------------------------------------------------
+
+train_correlation <- cor(select(train_set, where(is.numeric)))
+train_correlation_pmap <-
+  cor_pmat(select(train_set, where(is.numeric)))
+
+train_corr_p <- ggcorrplot(
+  train_correlation,
+  type = 'lower',
+  ggtheme = ggplot2::theme_bw,
+  title = 'Biopsy Diagnosis Numeric Variable Pearson Correlations',
+  hc.order = TRUE,
+  lab = TRUE,
+  p.mat = train_correlation_pmap
+)
+
+#train_corr_p
+
+# There are a very large amount of correlations
+# There may be very stron non-lienear correlations
+# To have a better scope rerun as spearman
+
+train_correlation_s <-
+  cor(select(train_set, where(is.numeric)), method = 'spearman')
+train_correlation_S_pmap <-
+  cor_pmat(select(train_set, where(is.numeric)), method = 'spearman')
+
+train_corr_s <- ggcorrplot(
+  train_correlation_s,
+  type = 'lower',
+  ggtheme = ggplot2::theme_bw,
+  title = 'Biopsy Diagnosis Numeric Variable Pearson Correlations',
+  hc.order = TRUE,
+  lab = TRUE,
+  lab_size = 2,
+  p.mat = train_correlation_S_pmap
+)
+
+#train_corr_p 
+train_corr_s
+
+# There are even larger amount of predictors which are non-linearly correlated
+
+# Will remove based on spearman
+
+spearman_remove <- findCorrelation(train_correlation_s,
+                                   verbose = FALSE,
+                                   names = TRUE)
+
+#spearman_remove
+
+train_set <- train_set %>%
+  select(-all_of(spearman_remove))
+
+```
+
+## *Boruta Feature Selection*
+
+*As the feature space remains large the Boruta Feasture selection wrapper*[^4] will be applied in order to consider variable importance when feature interactions are considered.
+
+[^4]: [*https://www.analyticsvidhya.com/blog/2016/03/select-important-variables-boruta-package/*](https://www.analyticsvidhya.com/blog/2016/03/select-important-variables-boruta-package/){.uri}
+
+```{r Boruta A, message=FALSE, warning=FALSE, cache=TRUE, echo=FALSE, fig.asp=0.8, fig.width=10, fig.align = 'center'}
+
+## Boruta Analysis --------------------------------------------------------
+
+theme_set(theme_bw())
+
+train_set <- train_set %>%
+  select(-all_of('id_number'))
+
+# GGplot Boruta Plot
+boruta_interpret <-
+  function(x, title = NULL, subtitle = NULL) {
+    decisions <- tibble(variable = names(x$finalDecision),
+                        decision = as.character(x$finalDecision))
+    
+    importance <- as_tibble(x$ImpHistory) %>%
+      pivot_longer(cols = everything(),
+                   names_to = 'variable')
+    
+    data <- left_join(importance, decisions) %>%
+      replace_na(list(decision = 'Metric')) %>%
+      mutate(across(where(is.character), as.factor)) %>%
+      mutate(variable = fct_reorder(variable, value, .desc = FALSE))
+    
+    plot <- data %>%
+      ggplot(aes(variable, value, fill = decision)) +
+      geom_boxplot(alpha = 0.25) +
+      geom_jitter(position = position_jitterdodge()) +
+      scale_y_continuous('Importance') +
+      xlab('Predictor') +
+      guides(fill = guide_legend('Decision')) +
+      ggtitle(title, subtitle = subtitle) +
+      coord_flip()
+    
+    return(plot)
+    
+  }
+
+set.seed(756, sample.kind = 'Rounding')
+boruta_fs <- Boruta(diagnosis  ~ .,
+                    data = train_set,
+                    doTrace = 3,
+                    maxRuns = 10000)
+
+boruta_interpret(
+  boruta_fs,
+  'Biopsy Diagnosis Boruta Feature Selection',
+  'Biopsy Diagnosis festure selection via Boruta analysis with random forest variable importance'
+)
+```
+
+*The standard Boruta Algorithm uses Random forest to calculate feature importance, in this case it considered all the predictors to be important. In order to be certain the alaysis will be run a second time but using the xGBoost algorithm to measure feature importance.*
+
+```{r Boruta B, message=FALSE, warning=FALSE, cache=TRUE, echo=FALSE, fig.asp=0.8, fig.width=10, fig.align = 'center'}
+
+theme_set(theme_bw())
+
+# Boruta found no attributes to be unimportant
+# Considering that these are all numeric predicxtors the XGBoost variant of Boruta will
+# be applied
+
+set.seed(30, sample.kind = 'Rounding')
+boruta_fs_xgb <- Boruta(
+  diagnosis  ~ .,
+  data = train_set,
+  doTrace = 3,
+  getImp = getImpXgboost,
+  maxRuns = 10000
+)
+
+boruta_interpret(
+  boruta_fs_xgb,
+  'Biopsy Diagnosis Boruta Feature Selection',
+  'Biopsy Diagnosis festure selection via Boruta analysis with XGBoost variable importance'
+)
+
+#boruta_fs_xgb
+
+# Boruta with XGboost found 6 important variables
+# Concave points being the largest contributor
+
+# XGboost predictions may be better suited as it reduces the feature space significantly
+# XGboost variant will be used
+
+train_set <- train_set %>%
+  select(all_of(c(
+    'diagnosis', getSelectedAttributes(boruta_fs_xgb)
+  )))
+```
+
+*The analysis utilizing the XGBoost algorithm simplifies the feature space significantly and has a clear major contributor to the a predictive model. Both have determined that concave points. Considering these results the features determined by the XGBoost variant will be chosen as model predictors.*
+
+# *Model Training*
+
+*As previously stated there are two core models to train, a Neural Network and Linear eXtreme Gradient Boosting model. Each of these will be trained on two datasets. One compromised of the selected features in the natural state and another where the features have been centered,, scaled, transformed and have undergone PCA. This will train a total of 4 models with two model methods allowing comparison of the natural and interpretable data to processed data for modeling.*
+
+```{r Train Models, fig.align = 'center', fig.asp=0.8, fig.width=10, message=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
+
+# Data Preparation --------------------------------------------------------
+
+# A model that applies PCA and data preparation will be compared to
+# a model without these applied
+
+data_pre_process <-
+  preProcess(
+    train_set,
+    method = c('center', 'scale', 'YeoJohnson', 'pca'),
+    # PCA cutoff
+    thresh = 0.95
+  )
+
+#data_pre_process
+
+# PCA reduces 1 predictor with a variance threshold of 0.95
+train_set_pca <- as_tibble(predict(data_pre_process, train_set))
+
+# Train Model -------------------------------------------------------------
+
+# 2 Core Models will be trained
+# with each data set
+# a total of 4 models
+
+# The core model are
+# a) Neural Network
+# b) eXtreme Gradient Boosting via xgbLinear
+
+# As cancer diagnosis is a sensitive issue the model will be trained for
+# sensitivity
+
+## Training Parameters ----------------------------------------------------
+
+nnet_hyp <- expand.grid(size = seq(from = 1, to = 50, by = 1),
+                        decay = seq(from = 0.1, to = 1, by = 0.1))
+
+xgb_hyp <- expand.grid(
+  nrounds = c(50,100), 
+  eta = 0.3,
+  alpha = 0:1,
+  lambda = 0:1
+)
+
+## Train Control ----------------------------------------------------------
+
+train_control <- trainControl(
+  method = 'repeatedcv',
+  number = 10,
+  repeats = 5,
+  summaryFunction = twoClassSummary,
+  classProbs = TRUE,
+  allowParallel = TRUE
+)
+
+## Parallel Processing Settings -------------------------------------------
+
+cores <- detectCores() - 1
+
+# Train Models ------------------------------------------------------------
+
+# Start Parallel Processing
+cl <- makePSOCKcluster(cores)
+registerDoParallel(cl)
+
+# Neural Network
+set.seed(121, sample.kind = 'Rounding')
+nnet <- train(
+  diagnosis ~ .,
+  data = train_set,
+  method = 'nnet',
+  metric = 'Sens',
+  trControl = train_control,
+  tuneGrid = nnet_hyp
+)
+
+# Neural Network PCA
+set.seed(125, sample.kind = 'Rounding')
+nnet_pca <- train(
+  diagnosis ~ .,
+  data = train_set_pca,
+  method = 'nnet',
+  metric = 'Sens',
+  trControl = train_control,
+  tuneGrid = nnet_hyp
+)
+
+# XGBoost
+set.seed(234, sample.kind = 'Rounding')
+xbg <- train(
+  diagnosis ~ .,
+  data = train_set,
+  method = 'xgbLinear',
+  metric = 'Sens',
+  trControl = train_control,
+  tuneGrid = xgb_hyp
+)
+
+# XGBoost PCA
+set.seed(700, sample.kind = 'Rounding')
+xgb_pca <- train(
+  diagnosis ~ .,
+  data = train_set_pca,
+  method = 'xgbLinear',
+  metric = 'Sens',
+  trControl = train_control,
+  tuneGrid = xgb_hyp
+)
+
+# Stop Parallel Processing
+stopCluster(cl)
+registerDoSEQ()
+```
+
+# *Model Selection*
+
+*Considering saved training resampled data the model that has the highest expectation is a Neural Network with processed data.*
+
+```{r Test Model, message=FALSE, warning=FALSE, cache=TRUE, echo=FALSE, fig.asp=0.8, fig.width=10, fig.align = 'center'}
+
+# Test Models -------------------------------------------------------------
+
+model_resamples <- resamples(list(nnet = nnet,nnet_pca = nnet_pca,xbg = xbg,xbg_pca = xgb_pca))
+
+bwplot(model_resamples)
+
+nnet_pred <- predict(nnet, test_set)
+nnet_pca_pred <- predict(nnet_pca,predict(data_pre_process, test_set))
+xgb_pred <- predict(xbg, test_set)
+xgb_pca_pred <- predict(xgb_pca,predict(data_pre_process, test_set))
+
+# NNET
+#confusionMatrix(nnet_pred,test_set$diagnosis)
+# Sensitivity : 0.9211, Specificity : 0.9844
+
+# NNET PCA
+#confusionMatrix(nnet_pca_pred,test_set$diagnosis)
+# Sensitivity : 0.9211, Specificity : 0.9844
+
+# No change in predictive power NNET PCA not required
+
+# XGBoost
+#confusionMatrix(xbg_pred,test_set$diagnosis)
+# Sensitivity : 0.8947, Specificity : 0.9688
+
+# XGBoost PCA
+#confusionMatrix(xgb_pca_pred,test_set$diagnosis)
+# Sensitivity : 0.9211, Specificity : 0.9531
+
+model_sensitivity <- list(nnet = nnet_pred,nnet_pca = nnet_pca_pred,xgb = xgb_pred,xbg_pca = xgb_pca_pred) %>% 
+  map_vec(sensitivity,test_set$diagnosis)
+
+model_specificity <- list(nnet = nnet_pred,nnet_pca = nnet_pca_pred,xgb = xgb_pred,xgb_pca = xgb_pca_pred) %>% 
+  map_vec(specificity,test_set$diagnosis)
+
+model_performance <- tibble(model = c('Neural Network','Neural Network PCA','xGBoost','xGBoost PCA'),
+                            sensitivity = model_sensitivity,
+                            specificity = model_specificity
+                            ) %>% 
+  arrange(desc(sensitivity))
+
+kbl(model_performance, col.names = c('Model','Sensitivity','Specificity'), booktabs = TRUE, format.args = list(big.mark = ",")) %>% 
+  kable_styling(position = 'center', full_width = FALSE, latex_options = c('hold_position','striped'), htmltable_class = 'lightable-classic-2')
+```
+
+*Of the four Models the model with the best Sensitivity on the test set is a natural data Neural Network with a sensitivity of `r model_performance$sensitivity[1]` .*
+
+*The model itself consists of a neural network with 6 predictors, 1 hidden layer, 12 neurons and two bias values.*
+
+```{r Plot Model, message=FALSE, warning=FALSE, cache=TRUE, echo=FALSE, fig.asp=0.8, fig.width=10, fig.align = 'center'}
+
+NeuralNetTools::plotnet(nnet)
+```
+
+# *Holdout Set Model Performance*
+
+The confusion matrix of the Neural Network model on the holdout set is:
+
+```{r Gold Model, message=FALSE, warning=FALSE, cache=TRUE, echo=FALSE, fig.asp=0.8, fig.width=10, fig.align = 'center'}
+
+# Gold Model Performance --------------------------------------------------
+
+nnet_hold_pred <- predict(nnet, holdout_set)
+
+#confusionMatrix(nnet_hold_pred,holdout_set$diagnosis)
+gold_sens <- sensitivity(nnet_hold_pred,holdout_set$diagnosis)
+gold_spec <- specificity(nnet_hold_pred,holdout_set$diagnosis)
+
+gold_confusion <- tibble(
+       Metric = names(confusionMatrix(nnet_hold_pred, holdout_set$diagnosis)$byClass),
+       Value = confusionMatrix(nnet_hold_pred, holdout_set$diagnosis)$byClass)
+
+kbl(gold_confusion, col.names = c('Metric','Value'), booktabs = TRUE, format.args = list(big.mark = ",")) %>% 
+  kable_styling(position = 'center', full_width = FALSE, latex_options = c('hold_position','striped'), htmltable_class = 'lightable-classic-2')
+```
+
+*The final model has solid performance on the holdout set with a sensitivity of `r gold_sens` and a specificity of `r gold_spec` . As such we can be certain that given this training data the model has been accurately trained.*
+
+# *Conclusions*
+
+*While this type of model is by no mean a substitute for expert medical diagnosis it does highlight the most prominent features to consider when performing a diagnosis. In this instance Texture, Area, number of Concave points, Standard Error of Symmetry and Maximum Mean of Smoothness and Symmetry are major contributors in diagnosis Breast Cancer.*
